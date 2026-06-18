@@ -507,6 +507,6 @@ MIT License - 详见 [LICENSE](LICENSE)
 
 ## 📧 联系
 
-- 作者: iflyelf
+- 作者: xiaonuo
 - 博客: [https://www.xiaonuo.live](https://www.xiaonuo.live)
 - Issues: [https://github.com/danxiaonuo/iflygo-docker/issues](https://github.com/danxiaonuo/iflygo-docker/issues)
