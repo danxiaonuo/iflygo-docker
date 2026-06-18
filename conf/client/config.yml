@@ -1,0 +1,173 @@
+# iFlyGo Client 配置文件
+# 这是 iFlyGo 客户端节点的配置模板
+# iFlyGo 是注重性能、简洁与安全的 overlay 安全网络隧道工具
+
+# 配置证书
+pki:
+  ca: /etc/iflygo/ca.crt
+  cert: /etc/iflygo/host.crt
+  key: /etc/iflygo/host.key
+  # 握手时使用的证书版本（1 或 2，推荐 2）
+  initiating_version: 2
+
+# 服务端 IP 和端口号 - 定义 lighthouse 节点的固定公网地址
+# 语法: "{iflygo内网IP}": ["{可路由的公网IP/域名}:{端口}"]
+static_host_map:
+  # IPv4 示例：lighthouse1 的内网 IP 映射到公网地址
+  "192.168.100.1": ["lighthouse1.example.com:6688"]
+  # IPv6 示例（如果启用）
+  # "fd88::ffff:c0a8:6401": ["lighthouse1.example.com:6688"]
+  # 可添加多个 lighthouse 节点
+  # "192.168.100.2": ["lighthouse2.example.com:6688"]
+
+# 选择用于与静态映射中的主机通信的 IP 版本
+static_map:
+  # DNS 缓存时间 - 当 static_host_map 条目包含域名时，每隔此时间重新查询 DNS
+  cadence: 30s
+  # 网络地址类型 - ip4: 仅 IPv4, ip6: 仅 IPv6, ip: 同时支持 IPv4 和 IPv6
+  network: ip
+  # DNS 查询超时时间 
+  lookup_timeout: 250ms
+
+# 主节点（Lighthouse）配置
+lighthouse:
+  # 是否成为主节点 - CLIENT 节点必须设置为 false
+  am_lighthouse: false
+  # 更新到主节点的间隔时间（秒）- 客户端节点向 lighthouse 报告的频率
+  interval: 3
+  # 服务端 IP 地址列表 - 客户端必须填写所有 lighthouse 的 iFlyGo 内网 IP（非公网 IP）
+  hosts:
+    - "192.168.100.1"
+    # 如果启用 IPv6，添加对应的 IPv6 内网地址
+    # - "fd88::ffff:c0a8:6401"
+    # 如果有多个 lighthouse 节点，全部列出
+    # - "192.168.100.2"
+
+  # 远程地址允许列表 - 控制此节点在握手时考虑的 IP 范围
+  remote_allow_list:
+    # 禁用 IPv6 用于 P2P 通信（如果不需要 IPv6，建议禁用以避免路由问题）
+    '::/0': false
+
+# 监听地址和端口
+listen:
+  # 监听地址 - "[::]" 同时监听 IPv4 和 IPv6，"0.0.0.0" 仅 IPv4
+  host: "[::]"
+  # 监听端口 - 客户端推荐使用 0，由系统动态分配（适合 NAT 后的客户端）
+  port: 0
+  # UDP 读缓冲区大小（字节）- 高流量场景下可提高性能
+  read_buffer: 20000000
+  # UDP 写缓冲区大小（字节）
+  write_buffer: 20000000
+  # 是否发送/接受 recv_error 数据包 - 帮助加速重连（可选: always, never, private）
+  send_recv_error: always
+
+# 配置定期发送入站/出站数据包以避免防火墙 NAT 映射过期（打洞）
+punchy:
+  # 是否持续打洞 - 继续定期发送入站/出站，以避免防火墙 NAT 映射过期
+  punch: true
+  # 响应模式 - 如果打洞失败，您尝试访问的节点将重新连接到您（对称 NAT 穿透）
+  respond: true
+  # 延迟对行为不当的 NAT 的打孔响应时间，默认值为 1 秒
+  delay: 1s
+
+# 加密算法 - 为网络选择可用的加密算法
+# 选项: chachapoly（推荐，性能更好）或 aes
+# 重要提示: 此值在所有节点/灯塔上必须相同！
+cipher: chachapoly
+
+# 本地范围 - 定义关于本地网络范围的提示，加快发现到网络相邻 iflygo 节点的最快路径
+preferred_ranges: ["192.168.100.0/24"]
+
+# 中继设置 - 用于无法建立直接连接的网络（实验性）
+relay:
+  # 中继服务器列表 - 当无法直连时通过这些节点的内网 IP 中继流量
+  relays:
+    - 192.168.100.1
+    # - 192.168.100.2
+  # 是否允许运行中继列表 - 客户端通常设置为 false（不作为中继服务器）
+  am_relay: false
+  # 允许运行中继 - 设置为 true 允许此客户端通过中继节点建立连接
+  use_relays: true
+
+# 网络配置（TUN 设备）
+tun:
+  # 是否禁用 tun 网卡 - 设置为 false 启用 TUN 设备
+  disabled: false
+  # TUN 网卡名称
+  dev: iflygo
+  # 是否转发本地广播数据包，地址取决于 pki.cert 中编码的 ip/mask
+  drop_local_broadcast: true
+  # 是否转发组播数据包
+  drop_multicast: true
+  # 传输队列长度 - 如果注意到 tun 上有大量传输丢弃，提高此数字可能有帮助
+  tx_queue: 1500
+  # 默认 MTU - 每个数据包的最大传输单元
+  mtu: 1300
+  # 基于路由的 MTU 覆盖（通常不需要）
+  routes: []
+  # 不安全路由 - 允许通过 iflygo 将流量路由到非 iflygo 节点
+  # 客户端通常不需要配置（留空），如需访问 lighthouse 暴露的子网可参考 server 模板
+  unsafe_routes: []
+    #- route: 10.8.1.0/24
+    #  via: 192.168.100.10
+    #  mtu: 1300
+
+# 日志配置
+logging:
+  # 日志级别: trace, debug, info, warn, 或 error
+  # 默认是 info，可重载
+  level: info
+  # 日志格式: json 或 text
+  format: text
+
+# 握手管理器设置
+handshakes:
+  # 握手重试间隔 - 第 1 次尝试后等待 try_interval，第 2 次后等待 2 * try_interval
+  try_interval: 100ms
+  # 握手超时次数 - 握手超过此次数后将超时
+  retries: 10
+  # 握手的缓冲通道大小 - 用于快速发送握手响应
+  trigger_buffer: 64
+
+# 防火墙配置（安全组规则）
+firewall:
+
+  # 连接跟踪表配置
+  conntrack:
+    tcp_timeout: 12m
+    udp_timeout: 3m
+    default_timeout: 10m
+
+  # 出站规则 - 允许此节点向其他节点发送的流量
+  outbound:
+    # 允许所有出站流量（IPv4）
+    - port: any
+      proto: any
+      groups: any
+      host: any
+      cidr: 0.0.0.0/0
+      local_cidr: 0.0.0.0/0
+    # 允许所有出站流量（IPv6，如果启用）
+    - port: any
+      proto: any
+      groups: any
+      host: any
+      cidr: ::/0
+      local_cidr: ::/0
+
+  # 入站规则 - 允许其他节点向此节点发送的流量
+  inbound:
+    # 允许所有入站流量（IPv4）- 生产环境建议按 group 收紧规则
+    - port: any
+      proto: any
+      groups: any
+      host: any
+      cidr: 0.0.0.0/0
+      local_cidr: 0.0.0.0/0
+    # 允许所有入站流量（IPv6，如果启用）
+    - port: any
+      proto: any
+      groups: any
+      host: any
+      cidr: ::/0
+      local_cidr: ::/0
