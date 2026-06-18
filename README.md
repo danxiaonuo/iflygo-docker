@@ -147,18 +147,12 @@ environment:
 
 ```
 iflygo-docker/
-├── Dockerfile                 # 多阶段构建(Go 源码编译 + 运行镜像)
 ├── docker-compose.yml         # Docker Compose 编排文件
-├── init.sh                    # 配置初始化脚本(自动生成证书与配置)
-├── entrypoint.sh              # 容器入口脚本
 ├── conf/
 │   ├── server/
 │   │   └── config.yml         # Server 配置模板(含中文注释)
 │   └── client/
 │       └── config.yml         # Client 配置模板(含中文注释)
-├── .github/workflows/
-│   └── docker-publish.yml     # GitHub Actions 自动构建工作流
-├── .gitignore
 └── README.md
 ```
 
