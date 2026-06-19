@@ -31,12 +31,23 @@ services:
       - LISTEN_PORT=6688
       # 日志级别: trace/debug/info/warn/error (默认 info)
       - LOG_LEVEL=info
-      # 证书签发时的分组(可选, 逗号分隔)
-      - GROUPS=lighthouse,admin
+      # 证书签发时的分组(可选, 逗号分隔; 注意: 勿用 GROUPS 与 bash 内置变量冲突)
+      - CERT_GROUPS=lighthouse,admin
       # TUN 设备名 (默认 iflygo)
       - TUN_DEV=iflygo
       # TUN MTU (默认 1300)
       - TUN_MTU=1300
+      
+      # ===== 高级配置（可选，注释掉则使用默认值） =====
+      # 本地网络偏好范围（默认: 10.88.0.0/16,fd88::/64）
+      # - PREFERRED_RANGES=10.88.0.0/16,fd88::/64
+      # 不安全路由（server 可配置路由导向网关节点，留空则用模板默认示例）
+      # 示例：单网关
+      # - UNSAFE_ROUTES=route=10.8.1.0/24,via=10.88.1.1,mtu=1300,metric=100
+      # 示例：多网关 ECMP + 多条路由
+      # - UNSAFE_ROUTES=route=10.8.1.0/24,via=10.88.1.1;route=10.0.9.0/24,via=10.88.2.1:10|10.88.2.2:5
+      # ==================================================
+      
     volumes:
       # 配置与证书持久化
       - ./data/server/config:/etc/iflygo:rw
@@ -81,7 +92,7 @@ services:
       - LIGHTHOUSE_IP=192.168.100.1
       # lighthouse 的公网入口 (必须与 server 的 LIGHTHOUSE_PUBLIC 一致)
       - LIGHTHOUSE_PUBLIC=your-server-ip:6688
-      
+
       # ===== 多 Lighthouse 配置（高可用场景，注释掉使用单 lighthouse） =====
       # 如果配置了 LIGHTHOUSE_IP_1, 会自动覆盖上面的单 lighthouse 变量
       # - LIGHTHOUSE_IP_1=10.88.0.1
@@ -93,13 +104,13 @@ services:
       # - LIGHTHOUSE_IP_3=10.88.0.3
       # - LIGHTHOUSE_PUBLIC_3=tokyo.example.com:6688
       # ==============================================================
-      
+
       # 监听端口 (client 推荐 0, 系统动态分配)
       - LISTEN_PORT=0
       # 日志级别: trace/debug/info/warn/error (默认 info)
       - LOG_LEVEL=info
-      # 证书签发时的分组(可选, 逗号分隔, 用于防火墙规则)
-      - GROUPS=laptop,home,ssh
+      # 证书签发时的分组(可选, 逗号分隔, 用于防火墙规则; 注意: 勿用 GROUPS 与 bash 内置变量冲突)
+      - CERT_GROUPS=laptop,home,ssh
       # TUN 设备名 (默认 iflygo)
       - TUN_DEV=iflygo
       # TUN MTU (默认 1300)
