@@ -439,8 +439,7 @@ docker run --rm \
   -ip 10.88.1.1 \
   -ip6 fd88::ffff:a58:101 \
   -groups home \
-  -subnets 10.8.1.0/24 \
-  -duration 876000h
+  -subnets 10.8.1.0/24
 
 # 也可用环境变量传参(与命令行等价)
 docker run --rm \
@@ -506,7 +505,6 @@ docker exec iflygo-server iflygo-cert sign \
   -name "uola-office-dns-01" \
   -networks "10.88.0.100/16,fd88::ffff:a58:100/64" \
   -groups "laptop,home,ssh" \
-  -duration 876000h \
   -out-crt uola-office-dns-01.crt \
   -out-key uola-office-dns-01.key
 
@@ -516,7 +514,6 @@ docker exec iflygo-server iflygo-cert sign \
   -networks "10.88.1.1/16,fd88::ffff:a58:101/64" \
   -groups "home" \
   -subnets "10.8.1.0/24" \
-  -duration 876000h \
   -out-crt uola-home-gw-01.crt \
   -out-key uola-home-gw-01.key
 
@@ -736,8 +733,7 @@ iflygo-cert sign \
   -name gateway1 \
   -networks "192.168.100.99/24" \
   -subnets "172.16.1.0/24,10.0.9.0/24,10.0.88.0/24" \
-  -groups "gateway" \
-  -duration 876000h
+  -groups "gateway"
 ```
 
 #### 路由生效验证
