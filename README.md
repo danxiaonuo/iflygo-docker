@@ -15,6 +15,105 @@
 
 ---
 
+## 🏛️ 架构与通信原理
+
+iFlyGo 是一个基于 [Noise Protocol Framework](https://noiseprotocol.org/) 的 P2P（点对点）overlay 网络。它由三类角色组成：**Lighthouse（灯塔/服务端）**、**Relay（中继）** 和 **Client（客户端）**。
+
+### 整体架构图（高可用生产部署）
+
+```
+                          ┌──── 互联网云端 (公网区域) ────┐
+                          │                              │
+                   ┌──────┴──────┐              ┌───────┴──────┐
+                   │  Lighthouse1 │              │ Lighthouse2  │
+                   │  (上海机房)   │              │  (新加坡机房) │
+                   │─────────────│              │──────────────│
+                   │ am_lighthouse│              │am_lighthouse │
+                   │    = true    │              │   = true     │
+                   │ am_relay     │              │am_relay      │
+                   │    = true    │              │   = true     │
+                   │─────────────│              │──────────────│
+                   │公网固定IP/域名│◄────互相──────►│公网固定IP/域名│
+                   │sh.example.com│    同步发现   │sg.example.com│
+                   │    :6688     │              │    :6688     │
+                   │─────────────│              │──────────────│
+                   │OverlayIP:    │              │OverlayIP:    │
+                   │ 10.88.0.1    │              │ 10.88.0.2    │
+                   │fd88::a58:1   │              │fd88::a58:2   │
+                   └──────┬──────┘              └───────┬──────┘
+                          │                              │
+                          │  ① 注册自己的公网地址           │
+                          │  ② 查询对方节点的公网地址        │
+                          │     (支持多lighthouse容错)      │
+              ┌───────────┴───────────┬──────────────────┴─────────────┐
+              │                       │                                │
+              ▼                       ▼                                ▼
+    ┌─────────────────┐    ┌─────────────────┐              ┌─────────────────┐
+    │   Client A      │    │   Client B      │              │   Client C      │
+    │ (办公室电脑)      │    │  (家庭路由器)    │              │  (移动设备)      │
+    │─────────────────│    │─────────────────│              │─────────────────│
+    │ NAT后 动态公网IP │    │ NAT后 动态公网IP │              │ 4G/5G 运营商NAT  │
+    │ port: 0 (动态)   │    │ port: 0 (动态)   │              │ port: 0 (动态)   │
+    │─────────────────│    │─────────────────│              │─────────────────│
+    │ 10.88.0.100     │    │ 10.88.0.101     │              │ 10.88.0.102     │
+    │ fd88::a58:100   │    │ fd88::a58:101   │              │ fd88::a58:102   │
+    └────────┬────────┘    └────────┬────────┘              └────────┬────────┘
+             │                      │                                │
+             │  ③ UDP 打洞 + P2P 直连 (端到端加密，不经过 lighthouse) │
+             │      ═══════════════════════════════════════════════  │
+             │     ║  AES-256-GCM / ChachaPoly 加密流量              ║
+             │      ═══════════════════════════════════════════════  │
+             │                      │                                │
+             └──────────────────────┼────────────────────────────────┘
+                                    │
+                    ④ 若 P2P 打洞失败(双方都在对称NAT后)
+                       流量自动切换到 Relay 中转 (经 Lighthouse1/2)
+                                    │
+                    ┌───────────────┴────────────────┐
+                    │  Relay 中继 (灯塔兼任)           │
+                    │  • 仅转发无法直连的流量           │
+                    │  • 保持端到端加密不变             │
+                    │  • Lighthouse1/2 同时作为中继    │
+                    └─────────────────────────────────┘
+
+
+    ┌─────────────────────────────────────────────────────────────────┐
+    │  📊 关键特性说明                                                  │
+    ├─────────────────────────────────────────────────────────────────┤
+    │  ✅ 高可用: 多 Lighthouse 互为备份, 一个挂掉自动切换            │
+    │  ✅ P2P 优先: 90% 流量走直连, 性能不受 Lighthouse 带宽限制      │
+    │  ✅ 自动兜底: 对称 NAT 等无法直连场景, 自动启用 Relay 中转      │
+    │  ✅ 端到端加密: 即使经 Relay 转发, Lighthouse 也无法解密内容    │
+    │  ✅ 跨平台: Docker 容器统一部署, 支持 amd64/arm64/树莓派/NAS   │
+    └─────────────────────────────────────────────────────────────────┘
+```
+
+### 通信流程详解
+
+| 步骤 | 阶段 | 说明 |
+|------|------|------|
+| ① | **注册与发现** | 每个 client 启动后，定期（`LIGHTHOUSE_INTERVAL` 秒）向 lighthouse 上报自己的公网地址。当 A 想连接 B 时，先向 lighthouse 查询 B 的公网地址。 |
+| ② | **UDP 打洞** | A 和 B 拿到对方公网地址后，同时向对方发送 UDP 包进行 NAT 打洞（`punchy`），尝试穿透各自的 NAT/防火墙。 |
+| ③ | **P2P 直连** | 打洞成功后，A 和 B 建立**端到端加密隧道**，数据直接传输，**不经过 lighthouse**（lighthouse 只负责牵线，不转发数据）。 |
+| ④ | **中继兜底** | 若 P2P 打洞失败（如双方都在对称 NAT 后），流量改由 `relay` 节点转发。中继节点需 `am_relay: true`，客户端需 `use_relays: true`。 |
+
+### 三类角色对比
+
+| 角色 | RUNMODE | am_lighthouse | am_relay | 公网 IP | 监听端口 | 典型部署位置 |
+|------|---------|---------------|----------|---------|----------|--------------|
+| **Lighthouse** | `server` | `true` | `true`（可兼任中继） | ✅ 必须 | 固定 `6688` | 云服务器（有公网IP） |
+| **Relay** | `server` | 可选 | `true` | ✅ 必须 | 固定 `6688` | 云服务器（通常由 lighthouse 兼任） |
+| **Client** | `client` | `false` | `false` | ❌ 不需要 | 动态 `0` | NAT 后的内网设备 |
+
+### 关键设计要点
+
+- **Lighthouse 不转发数据**：它只是"地址簿"，帮节点发现彼此的公网地址。真实流量走 P2P 直连，性能不受 lighthouse 带宽限制。
+- **Relay 是兜底方案**：仅在 P2P 直连失败时启用。生产环境通常让 lighthouse 同时兼任 relay（`am_relay: true`）。
+- **所有节点 overlay IP 同网段**：示例中 `10.88.0.0/16`（IPv4）和 `fd88::/64`（IPv6），由证书 `-networks` 字段绑定，不可伪造。
+- **加密算法必须统一**：所有节点的 `CIPHER` 必须一致（默认 `chachapoly`），否则无法握手。
+
+---
+
 ## 📦 快速开始
 
 ### 1. 拉取镜像
@@ -90,28 +189,73 @@ docker-compose down
 
 | 变量名 | 说明 | 默认值 | 示例 |
 |--------|------|--------|------|
+| **🚀 基础运行** | | | |
 | `RUNMODE` | 运行模式 | `client` | `server` / `client` |
 | `NODE` | 节点名称（用于证书 `-name`） | `iflygo-node` | `lighthouse1` / `client1` |
 | `CERT_HOSTNAME` | 证书文件主机名（命名 `<名>.crt/.key`） | 同 `NODE` | `uola-servers-lead-01` |
+| **🌐 节点网络** | | | |
 | `IFLYGO_IP` | 此节点的内网 IPv4 地址 | `10.88.0.1` | `10.88.0.2` |
 | `IFLYGO_IP_V6` | 此节点的内网 IPv6 地址（留空则不签发 IPv6） | `fd88::ffff:a58:1` | `fd88::ffff:a58:2` |
 | `IFLYGO_NETMASK` | IPv4 子网掩码（CIDR 位数） | `16` | `16` / `24` |
 | `IFLYGO_NETMASK_V6` | IPv6 子网掩码（CIDR 位数） | `64` | `64` |
-| `LIGHTHOUSE_IP` | Lighthouse 内网 IP（单节点） | `10.88.0.1` | `10.88.0.1` |
-| `LIGHTHOUSE_PUBLIC` | Lighthouse 公网入口（单节点） | `127.0.0.1:6688` | `1.2.3.4:6688` |
-| `LISTEN_HOST` | 监听地址 | `::` | `0.0.0.0` |
-| `LISTEN_PORT` | 监听端口 | `6688` | `0` (client 推荐 0) |
+| **🏠 Lighthouse（单节点）** | | | |
+| `LIGHTHOUSE_IP` | Lighthouse 内网 IPv4 | `10.88.0.1` | `10.88.0.1` |
+| `LIGHTHOUSE_IP_V6` | Lighthouse 内网 IPv6（留空则不生成） | `fd88::ffff:a58:1` | `fd88::ffff:a58:1` |
+| `LIGHTHOUSE_PUBLIC` | Lighthouse 公网入口 | `127.0.0.1:6688` | `1.2.3.4:6688` |
+| `LIGHTHOUSE_INTERVAL` | 向 lighthouse 报告间隔（秒） | `3` | `60` |
+| **🏘️ Lighthouse（多节点）** | 见下方[多 Lighthouse 章节](#多-lighthouse-环境变量高可用场景) | | |
+| `LIGHTHOUSE_IP_N` | 第 N 个 lighthouse 内网 IP | (空) | `10.88.0.1` |
+| `LIGHTHOUSE_PUBLIC_N` | 第 N 个 lighthouse 公网入口 | (空) | `shanghai.example.com:6688` |
+| `LIGHTHOUSE_IP_N_V6` | 第 N 个 lighthouse IPv6（可选） | (空) | `fd88::ffff:a58:1` |
+| **🔌 监听（Listen）** | | | |
+| `LISTEN_HOST` | 监听地址 | `[::]` | `0.0.0.0` |
+| `LISTEN_PORT` | 监听端口 | server: `6688`<br>client: `0` | `0` (动态端口) |
+| `READ_BUFFER` | UDP 读缓冲区大小（字节） | `20000000` | `30000000` |
+| `WRITE_BUFFER` | UDP 写缓冲区大小（字节） | `20000000` | `30000000` |
+| `SEND_RECV_ERROR` | recv_error 数据包模式 | `always` | `always` / `never` / `private` |
+| **🔐 加密与证书（PKI）** | | | |
+| `CIPHER` | 加密算法（**所有节点必须一致**） | `chachapoly` | `chachapoly` / `aes` |
+| `PKI_INITIATING_VERSION` | 证书版本（推荐 v2） | `2` | `1` / `2` |
+| `CERT_GROUPS` | 证书分组（**勿用 `GROUPS`**，与 bash 内置变量冲突） | server: `lead`<br>client: (空) | `laptop,home,ssh` |
+| `SUBNETS` | 网关证书子网路由（用于 unsafe_routes） | (空) | `10.8.1.0/24` |
+| `CA_DURATION` | CA 证书有效期 | `876000h` (100年) | `876000h` |
+| `CERT_DURATION` | 节点证书有效期（**留空则自动跟随 CA 剩余有效期**） | (空，自动跟随) | `26280h` (3年) |
+| `AUTO_GEN_CA` | 自动生成 CA | `true` | `false` |
+| **🌉 中继（Relay）** | | | |
+| `RELAYS` | 中继服务器列表（逗号分隔内网 IP） | (空，用模板) | `10.88.0.1,10.88.0.2` |
+| `AM_RELAY` | 是否作为中继节点 | (空，用模板) | `true` / `false` |
+| `USE_RELAYS` | 是否使用中继连接 | (空，用模板) | `true` / `false` |
+| **🔗 NAT 打洞（Punchy）** | | | |
+| `PUNCH` | 是否持续打洞 | `true` | `true` / `false` |
+| `PUNCH_RESPOND` | 响应模式（对称 NAT 穿透） | `true` | `true` / `false` |
+| `PUNCH_DELAY` | 打洞响应延迟 | `1s` | `2s` |
+| **🤝 握手（Handshakes）** | | | |
+| `HANDSHAKE_TRY_INTERVAL` | 握手重试间隔 | `100ms` | `200ms` |
+| `HANDSHAKE_RETRIES` | 握手超时次数 | `10` | `20` |
+| `HANDSHAKE_TRIGGER_BUFFER` | 握手缓冲通道大小 | `64` | `128` |
+| **🛡️ TUN 设备** | | | |
 | `TUN_DEV` | TUN 设备名 | `iflygo` | `iflygo` |
 | `TUN_MTU` | TUN MTU | `1300` | `1300` |
-| `LOG_LEVEL` | 日志级别 | `info` | `debug` / `trace` |
-| `LOG_FORMAT` | 日志格式 | `text` | `json` |
-| `CERT_GROUPS` | 证书分组（**勿用 `GROUPS`**，与 bash 内置变量冲突） | (空) | `laptop,home,ssh` |
-| `SUBNETS` | 网关证书子网路由（用于 unsafe_routes） | (空) | `10.8.1.0/24` |
+| `TUN_DISABLED` | 是否禁用 TUN（lighthouse 可禁用） | `false` | `true` / `false` |
+| `DROP_LOCAL_BROADCAST` | 是否转发本地广播 | `true` | `true` / `false` |
+| `DROP_MULTICAST` | 是否转发组播 | `true` | `true` / `false` |
+| `TX_QUEUE` | 传输队列长度 | `1500` | `2000` |
+| **🛣️ 路由配置** | | | |
 | `PREFERRED_RANGES` | 本地网络偏好范围（逗号分隔 CIDR） | `10.88.0.0/16,fd88::/64` | `172.16.0.0/24,10.99.0.0/16` |
-| `UNSAFE_ROUTES` | 不安全路由（分号分隔多条，见下方格式说明） | (空，用模板默认) | `route=10.8.1.0/24,via=10.88.1.1` |
-| `CA_DURATION` | CA 证书有效期 | `876000h` (100年) | `876000h` |
-| `CERT_DURATION` | 节点证书有效期（**留空则自动跟随 CA 剩余有效期**，避免超期报错） | (空，自动跟随) | `26280h` (3年) / `876000h` (100年) |
-| `AUTO_GEN_CA` | 自动生成 CA | `true` | `false` |
+| `UNSAFE_ROUTES` | 不安全路由（[格式说明](#unsafe_routes-环境变量格式)） | (空，用模板默认) | `route=10.8.1.0/24,via=10.88.1.1` |
+| **🌍 静态映射（DNS）** | | | |
+| `STATIC_MAP_CADENCE` | DNS 缓存时间 | `30s` | `60s` |
+| `STATIC_MAP_NETWORK` | 网络地址类型 | `ip` | `ip4` / `ip6` / `ip` |
+| `STATIC_MAP_LOOKUP_TIMEOUT` | DNS 查询超时 | `250ms` | `500ms` |
+| **📝 日志** | | | |
+| `LOG_LEVEL` | 日志级别 | `info` | `debug` / `trace` / `warn` / `error` |
+| `LOG_FORMAT` | 日志格式 | `text` | `text` / `json` |
+| **⚙️ 配置管理** | | | |
+| `FORCE_REGEN` | 强制用环境变量重新生成配置（旧配置自动备份为 `.bak`） | `false` | `true` / `false` |
+
+> 提示：大部分高级配置保持默认值即可，仅在特殊场景下调整（如高流量扩大缓冲区、特定 NAT 环境调整打洞参数、统一证书加密算法等）。
+
+> ⚠️ **配置更新机制**：首次启动会根据环境变量生成 `config.yml`，**之后再修改环境变量默认不会生效**（避免覆盖用户手动修改）。如需让新环境变量生效，设置 `FORCE_REGEN=true` 强制重新生成（旧配置会自动备份为 `config.yml.bak.<时间戳>`）。
 
 #### UNSAFE_ROUTES 环境变量格式
 
@@ -275,6 +419,76 @@ docker run -d \
 
 > 提示：如果不设置 `CERT_HOSTNAME`，证书文件名默认与 `NODE` 相同（如 `NODE=client1` 则生成 `client1.crt` / `client1.key`）。
 
+### 在服务端签发客户端证书（快捷方式）
+
+使用 `docker run --rm` 可以在服务端便捷地为客户端签发证书，无需手动输入 `iflygo-cert` 命令（需挂载服务端的证书目录，以使用已有的 CA）：
+
+```bash
+# 基础用法: 签发 IPv4 单栈证书
+docker run --rm \
+  -v $(pwd)/data/server/config:/etc/iflygo \
+  danxiaonuo/iflygo:latest sign \
+  -name client2 \
+  -ip 10.88.0.101
+
+# 完整用法: 签发 IPv4+IPv6 双栈 + 分组 + 网关子网路由
+docker run --rm \
+  -v $(pwd)/data/server/config:/etc/iflygo \
+  danxiaonuo/iflygo:latest sign \
+  -name uola-home-gw-01 \
+  -ip 10.88.1.1 \
+  -ip6 fd88::ffff:a58:101 \
+  -groups home \
+  -subnets 10.8.1.0/24 \
+  -duration 876000h
+
+# 也可用环境变量传参(与命令行等价)
+docker run --rm \
+  -v $(pwd)/data/server/config:/etc/iflygo \
+  -e NODE=client3 \
+  -e IFLYGO_IP=10.88.0.102 \
+  -e IFLYGO_IP_V6=fd88::ffff:a58:102 \
+  -e CERT_GROUPS=laptop,ssh \
+  danxiaonuo/iflygo:latest sign
+```
+
+> 💡 提示：`-v $(pwd)/data/server/config:/etc/iflygo` 挂载是必需的，签发脚本需要读取该目录下已有的 `ca.crt`/`ca.key` 来签发，并将新证书输出到同一目录。
+
+**输出文件**：
+- 证书：`data/server/config/client2.crt`
+- 私钥：`data/server/config/client2.key`
+- CA：`data/server/config/ca.crt`（客户端需要）
+
+**分发到客户端**：
+
+```bash
+# 将 3 个文件复制到客户端的配置目录
+cp data/server/config/ca.crt data/client/config/
+cp data/server/config/client2.crt data/client/config/
+cp data/server/config/client2.key data/client/config/
+
+# 启动客户端时指定证书文件名
+docker compose up -d iflygo-client \
+  -e NODE=client2 \
+  -e CERT_HOSTNAME=client2 \
+  -e IFLYGO_IP=10.88.0.101
+```
+
+**参数说明**：
+
+| 参数 | 必填 | 说明 | 示例 |
+|------|------|------|------|
+| `-name` | ✅ | 节点名称（证书 CN，也是输出文件名前缀） | `client2` |
+| `-ip` / `-ipv4` | ✅ | 节点内网 IPv4 地址 | `10.88.0.101` |
+| `-ip6` / `-ipv6` | ❌ | 节点内网 IPv6 地址（留空则不签发 IPv6） | `fd88::ffff:a58:101` |
+| `-netmask` | ❌ | IPv4 子网掩码（CIDR 位数） | `16`（默认） |
+| `-netmask6` | ❌ | IPv6 子网掩码（CIDR 位数） | `64`（默认） |
+| `-groups` | ❌ | 证书分组（逗号分隔，用于防火墙规则） | `laptop,home,ssh` |
+| `-subnets` | ❌ | 网关子网路由（逗号分隔，用于 unsafe_routes） | `10.8.1.0/24` |
+| `-duration` | ❌ | 证书有效期（留空则跟随 CA 剩余有效期） | `876000h`（100年） |
+
+> ⚠️ **注意**：签发的证书会输出到服务端的挂载卷（`data/server/config/`），如果证书已存在会自动跳过（避免误覆盖）。如需重签，请先删除旧证书。
+
 ### 手动管理
 
 如果需要在多个节点间共享 CA 或预先签发证书：
@@ -317,6 +531,47 @@ docker cp iflygo-server:/etc/iflygo/uola-office-dns-01.key ./data/client2/config
 > - **推荐方案**：不设置 `CERT_DURATION`（留空），自动跟随 CA 剩余有效期，避免超期问题
 > - **手动指定场景**：如果所有证书统一 100 年，手动设置 `CA_DURATION=876000h` + `CERT_DURATION=876000h`
 > - **旧 CA 兼容**：如果挂载卷里有旧 CA（短有效期），删除旧 CA 让 init.sh 重新生成，或不设置 `CERT_DURATION`
+
+### 查看证书信息
+
+使用 `iflygo-cert print` 命令查看证书详细信息（网络、分组、有效期等）：
+
+```bash
+# 查看 CA 证书信息
+docker exec -it iflygo-server iflygo-cert print -path /etc/iflygo/ca.crt
+
+# 查看节点证书信息
+docker exec -it iflygo-server iflygo-cert print -path /etc/iflygo/uola-servers-lead-01.crt
+
+# 在本地查看（如果证书已挂载到宿主机）
+docker run --rm -v $(pwd)/data/server/config:/certs \
+  danxiaonuo/iflygo:latest iflygo-cert print -path /certs/ca.crt
+```
+
+**输出示例**（CA 证书）：
+```
+iFlyGo Certificate (version 2)
+  Name: iFlyGo Root CA
+  Not before: 2024-01-01 00:00:00 +0000 UTC
+  Not after: 2123-12-31 23:59:59 +0000 UTC
+  Is CA: true
+```
+
+**输出示例**（节点证书）：
+```
+iFlyGo Certificate (version 2)
+  Name: uola-servers-lead-01
+  Networks:
+    - 10.88.0.1/16
+    - fd88::ffff:a58:1/64
+  Groups:
+    - lead
+  Is CA: false
+  Not before: 2024-01-01 00:00:00 +0000 UTC
+  Not after: 2123-12-31 23:59:59 +0000 UTC
+```
+
+> 💡 提示：通过 `print` 命令可以快速确认证书的网络地址、分组和有效期，排查配置问题。
 
 ---
 
@@ -567,7 +822,28 @@ docker logs iflygo-client
 # - 防火墙规则阻止
 ```
 
-### 4. 查看隧道状态
+### 4. 修改环境变量后配置不更新
+
+**原因**: `init.sh` 默认在 `config.yml` 已存在时跳过生成，避免覆盖用户的手动修改。
+
+```bash
+# 方法 1: 设置 FORCE_REGEN=true 强制重新生成（推荐）
+# 在 docker-compose.yml 中添加:
+#   environment:
+#     - FORCE_REGEN=true
+docker compose up -d   # 旧配置会备份为 config.yml.bak.<时间戳>
+
+# 方法 2: 手动删除旧配置后重启
+rm data/server/config/config.yml
+docker compose restart iflygo-server
+
+# 方法 3: 一次性命令
+docker compose run --rm -e FORCE_REGEN=true iflygo-server
+```
+
+> 💡 **建议**：首次部署或调试阶段可设置 `FORCE_REGEN=true` 让每次重启都用最新环境变量；生产稳定后改回 `false` 避免误覆盖。
+
+### 5. 查看隧道状态
 
 ```bash
 # 进入容器
